@@ -146,11 +146,11 @@ CSRF_TRUSTED_ORIGINS = [
     'https://poultry-farm-amasika-bce83.web.app',    # ← Firebase frontend
 ]
 
-# Cookie security: enable Secure flag in production (when not DEBUG)
-SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_SECURE = not DEBUG
+# Allow cross-origin cookies for Firebase frontend → Render backend
+SESSION_COOKIE_SAMESITE = 'None'
+SESSION_COOKIE_SECURE = True  # Required when SameSite=None
+CSRF_COOKIE_SAMESITE = 'None'
+CSRF_COOKIE_SECURE = True     # Required when SameSite=None
 
 
 # Django REST Framework
