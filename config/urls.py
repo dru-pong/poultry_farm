@@ -5,7 +5,7 @@ from django.contrib import admin
 from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
-from django.views.generic import TemplateView
+from .views import serve_frontend
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -29,5 +29,5 @@ if settings.DEBUG:
 # ✅ Catch-all route for Quasar frontend (must be LAST)
 # This serves index.html for any route not matched above, enabling Vue Router
 urlpatterns += [
-    re_path(r'^.*$', TemplateView.as_view(template_name='index.html')),
+    re_path(r'^(?P<path>.*)$', serve_frontend),  # ← Changed from TemplateView
 ]
