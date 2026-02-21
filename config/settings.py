@@ -47,7 +47,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # ← Added for static files on Render
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -59,10 +59,11 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'config.urls'
 
+# ✅ UPDATED: Point to frontend folder for index.html
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'frontend'],  # ← Changed from [] to include frontend
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -114,7 +115,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'  # ← For Render
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+STATICFILES_DIRS = [BASE_DIR / 'frontend']  # ← Added: serve Quasar JS/CSS from frontend folder
 
 # Media files (User uploads)
 MEDIA_URL = '/media/'
@@ -132,25 +134,26 @@ LOGOUT_REDIRECT_URL = '/admin/'
 
 
 # CORS & CSRF for Production
+# ✅ FIXED: Removed trailing spaces in URLs
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:9000",
     "http://127.0.0.1:9000",
-    "https://poultry-farm-amasika-bce83.web.app",  # ← Your Firebase frontend
+    "https://poultry-farm-amasika-bce83.web.app",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:9000',
     'http://127.0.0.1:9000',
-    'https://poultry-farm-lzio.onrender.com',    # ← Render backend
-    'https://poultry-farm-amasika-bce83.web.app',    # ← Firebase frontend
+    'https://poultry-farm-lzio.onrender.com',
+    'https://poultry-farm-amasika-bce83.web.app',
 ]
 
-# Allow cross-origin cookies for Firebase frontend → Render backend
-SESSION_COOKIE_SAMESITE = 'None'
-SESSION_COOKIE_SECURE = True  # Required when SameSite=None
-CSRF_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SECURE = True     # Required when SameSite=None
+# ✅ Keep SameSite=Lax since we're moving to same-origin deployment
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SECURE = True
 
 
 # Django REST Framework
