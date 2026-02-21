@@ -17,7 +17,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-poultry-ai-secret-key
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = [
-    'poultry-farm-backend.onrender.com',
+    'poultry-farm-lzio.onrender.com',
     'poultry-farm-amasika-bce83.web.app',
     'localhost',
     '127.0.0.1',
@@ -142,7 +142,7 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:9000',
     'http://127.0.0.1:9000',
-    'https://poultry-farm-backend.onrender.com',    # ← Render backend
+    'https://poultry-farm-lzio.onrender.com',    # ← Render backend
     'https://poultry-farm-amasika-bce83.web.app',    # ← Firebase frontend
 ]
 
