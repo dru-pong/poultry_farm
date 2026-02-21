@@ -2,13 +2,17 @@
 URL Configuration for Poultry AI project.
 """
 from django.contrib import admin
-from django.urls import path, include, re_path
+from django.urls import path, include
+from rest_framework.authtoken.views import obtain_auth_token
 from django.conf import settings
 from django.conf.urls.static import static
-from .views import serve_frontend
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/auth/login/', obtain_auth_token, name='api_login'),  # ← Token login
+    path('api/auth/logout/', lambda request: None, name='api_logout'),  # Simple logout
+
     path('api/', include('core.urls')),    
 
     # API endpoints for all apps
@@ -26,8 +30,3 @@ urlpatterns = [
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
-# ✅ Catch-all route for Quasar frontend (must be LAST)
-# This serves index.html for any route not matched above, enabling Vue Router
-urlpatterns += [
-    re_path(r'^(?P<path>.*)$', serve_frontend),  # ← Changed from TemplateView
-]
