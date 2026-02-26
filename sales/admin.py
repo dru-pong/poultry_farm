@@ -1,30 +1,42 @@
 from django.contrib import admin
-from .models import Sale
+from .models import Sale, SaleItem
 
+class SaleItemInline(admin.TabularInline):
+    model = SaleItem
+    extra = 0
+    readonly_fields = ['line_total']
+    autocomplete_fields = ['egg_type']
 
 @admin.register(Sale)
 class SaleAdmin(admin.ModelAdmin):
-    list_display = ['sale_datetime', 'sale_type', 'customer', 'broken_quantity', 'small_quantity', 'medium_quantity', 'big_quantity', 'total_amount', 'created_by']
-    list_filter = ['sale_type', 'sale_datetime', 'customer', 'created_by']
+    list_display = ['sale_datetime', 'sale_type', 'customer', 'total_amount', 'get_items_summary']
+    list_filter = ['sale_type', 'sale_datetime', 'customer']
     search_fields = ['notes', 'customer__name']
-    readonly_fields = ['total_amount', 'created_at', 'updated_at']
     date_hierarchy = 'sale_datetime'
-    ordering = ['-sale_datetime']
+    autocomplete_fields = ['customer']
+    inlines = [SaleItemInline]
+    
+    def get_items_summary(self, obj):
+        """Display a summary of items in the sale"""
+        items = obj.items.all()
+        if not items:
+            return "No items"
+        return ", ".join([f"{item.quantity}x {item.egg_type.name}" for item in items])
+    get_items_summary.short_description = 'Items'
     
     fieldsets = (
-        ('Sale Information', {
-            'fields': ('sale_type', 'customer', 'sale_datetime', 'total_amount')
-        }),
-        ('Quantities', {
-            'fields': (('broken_quantity', 'small_quantity'), ('medium_quantity', 'big_quantity'))
-        }),
-        ('Notes & Metadata', {
-            'fields': ('notes', 'created_by', 'created_at', 'updated_at')
+        ('Basic Information', {
+            'fields': ('sale_type', 'customer', 'sale_datetime', 'total_amount', 'notes')
         }),
     )
     
-    def get_readonly_fields(self, request, obj=None):
-        # Allow editing quantities but keep total_amount auto-calculated
-        if obj:
-            return ['total_amount', 'created_at', 'updated_at']
-        return ['total_amount', 'created_at', 'updated_at']
+    readonly_fields = ['total_amount']
+    ordering = ['-sale_datetime']
+
+@admin.register(SaleItem)
+class SaleItemAdmin(admin.ModelAdmin):
+    list_display = ['sale', 'egg_type', 'quantity', 'price_per_crate', 'line_total']
+    list_filter = ['egg_type', 'sale__sale_datetime']
+    search_fields = ['sale__notes']
+    autocomplete_fields = ['sale', 'egg_type']
+    readonly_fields = ['line_total']
