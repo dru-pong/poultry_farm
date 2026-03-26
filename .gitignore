@@ -4,19 +4,10 @@ __pycache__/
 *.so
 .Python
 env/
+venv/
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
 .env
 
@@ -27,11 +18,5 @@ db.sqlite3
 db.sqlite3-journal
 settingssss.py
 settings3.py
-# Render.com
 staticfiles/
-EOF
-
-# Stage the .gitignore file
-git add .gitignore
-git commit -m "Add proper .gitignore for poultry farm app"
-git push origin main
+media/

@@ -1,31 +1,19 @@
-from django.http import HttpResponse
-from django.conf import settings
-from pathlib import Path
+from django.contrib.auth import login
+from rest_framework import permissions, serializers
+from rest_framework.authtoken.serializers import AuthTokenSerializer
+from knox.views import LoginView as KnoxLoginView
 
-def serve_frontend(request, path=""):
-    """Serve Quasar frontend files as static content"""
-    # Map root path to index.html
-    if path == "" or path == "/":
-        path = "index.html"
-    
-    # Build file path
-    file_path = settings.BASE_DIR / "frontend" / path.lstrip("/")
-    
-    # Security: prevent directory traversal
-    if not str(file_path.resolve()).startswith(str(settings.BASE_DIR / "frontend")):
-        return HttpResponse("Not Found", status=404)
-    
-    # Serve the file
-    try:
-        with open(file_path, "rb") as f:
-            content = f.read()
-        # Set correct content type
-        content_type = "text/html" if path.endswith(".html") else "application/octet-stream"
-        return HttpResponse(content, content_type=content_type)
-    except FileNotFoundError:
-        # For Vue Router: return index.html for unknown routes (SPA fallback)
-        if "." not in path.split("/")[-1]:
-            index_path = settings.BASE_DIR / "frontend" / "index.html"
-            with open(index_path, "rb") as f:
-                return HttpResponse(f.read(), content_type="text/html")
-        return HttpResponse("Not Found", status=404)
+
+class LoginView(KnoxLoginView):
+    """
+    Knox login view. Accepts username + password, returns a knox token.
+    POST /api/auth/login/
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, format=None):
+        serializer = AuthTokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data['user']
+        login(request, user)
+        return super().post(request, format=None)

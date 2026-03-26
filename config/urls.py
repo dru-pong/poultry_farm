@@ -1,32 +1,30 @@
 """
-URL Configuration for Poultry AI project.
+URL Configuration for Poultry project.
 """
 from django.contrib import admin
 from django.urls import path, include
-from rest_framework.authtoken.views import obtain_auth_token
 from django.conf import settings
 from django.conf.urls.static import static
-
+from knox import views as knox_views
+from config.views import LoginView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/auth/login/', obtain_auth_token, name='api_login'),  # ← Token login
-    path('api/auth/logout/', lambda request: None, name='api_logout'),  # Simple logout
 
-    path('api/', include('core.urls')),    
+    # Auth
+    path('api/auth/login/', LoginView.as_view(), name='knox_login'),
+    path('api/auth/logout/', knox_views.LogoutView.as_view(), name='knox_logout'),
+    path('api/auth/logoutall/', knox_views.LogoutAllView.as_view(), name='knox_logoutall'),
 
-    # API endpoints for all apps
+    # App endpoints
     path('api/core/', include('core.urls')),
     path('api/inventory/', include('inventory.urls')),
     path('api/sales/', include('sales.urls')),
     path('api/expenses/', include('expenses.urls')),
     path('api/customers/', include('customers.urls')),
     path('api/reports/', include('reports.urls')),
+    path('api/flock/', include('flock.urls')),
 ]
 
-
-
-# ✅ Serve media files in development (Whitenoise handles static in production)
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
