@@ -7,9 +7,14 @@ from django.conf import settings
 from django.conf.urls.static import static
 from knox import views as knox_views
 from config.views import LoginView
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/ping/', csrf_exempt(lambda r: JsonResponse({'status': 'ok'}))),
 
     # Auth
     path('api/auth/login/', LoginView.as_view(), name='knox_login'),
