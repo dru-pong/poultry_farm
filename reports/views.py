@@ -525,10 +525,15 @@ class ReportViewSet(viewsets.ViewSet):
         """
         Per-customer breakdown: egg types, daily history (active days only),
         credit payment history, outstanding balance.
+
+        Optimised: bulk-fetches all data in a handful of queries instead of
+        N+1 per customer.
         """
         from sales.models import Sale, SaleItem, CreditPayment
         from customers.models import WholesaleCustomer
         from inventory.models import EggType
+        from django.db.models import F
+        from collections import defaultdict
 
         try:
             start_date = self._parse_date(request.query_params.get('start_date'), 'start_date')
@@ -538,67 +543,118 @@ class ReportViewSet(viewsets.ViewSet):
         except ValidationError as e:
             return Response({'error': str(e)}, status=400)
 
-        customers_data = []
-        customers = WholesaleCustomer.objects.filter(is_active=True).order_by('name')
-
-        for customer in customers:
-            # Sales in range
-            c_sales = (
-                Sale.objects
-                .filter(customer=customer, sale_datetime__date__range=[start_date, end_date])
-                .order_by('sale_datetime')
-                .prefetch_related('items__egg_type', 'credit_payments')
+        # ── 1. All-time balance aggregates (2 queries) ──────────────────
+        alltime_sales_agg = (
+            Sale.objects
+            .filter(customer__isnull=False)
+            .values('customer_id')
+            .annotate(
+                total_purchased=Sum('total_amount'),
+                total_upfront=Sum('amount_paid'),
             )
+        )
+        alltime_map = {
+            row['customer_id']: row for row in alltime_sales_agg
+        }
 
-            if not c_sales.exists():
-                continue
+        alltime_credit_agg = (
+            CreditPayment.objects
+            .values('customer_id')
+            .annotate(total_credit=Sum('amount_paid'))
+        )
+        credit_alltime_map = {
+            row['customer_id']: row['total_credit'] for row in alltime_credit_agg
+        }
 
-            # All-time totals for balance
-            all_sales = Sale.objects.filter(customer=customer)
-            total_purchased_alltime = all_sales.aggregate(t=Sum('total_amount'))['t'] or Decimal('0.00')
-            total_upfront_alltime = all_sales.aggregate(t=Sum('amount_paid'))['t'] or Decimal('0.00')
-            total_credit_alltime = CreditPayment.objects.filter(
-                customer=customer
-            ).aggregate(t=Sum('amount_paid'))['t'] or Decimal('0.00')
+        # ── 2. In-range sales (1 query, prefetch items) ────────────────
+        range_sales = list(
+            Sale.objects
+            .filter(
+                customer__isnull=False,
+                sale_datetime__date__range=[start_date, end_date],
+            )
+            .select_related('customer')
+            .prefetch_related('items__egg_type')
+            .order_by('customer_id', 'sale_datetime')
+        )
+
+        # Group sales by customer
+        sales_by_customer = defaultdict(list)
+        for sale in range_sales:
+            sales_by_customer[sale.customer_id].append(sale)
+
+        # ── 3. In-range credit payments (1 query) ──────────────────────
+        range_credits = list(
+            CreditPayment.objects
+            .filter(payment_date__date__range=[start_date, end_date])
+            .order_by('customer_id', 'payment_date')
+        )
+        credits_by_customer = defaultdict(list)
+        for cp in range_credits:
+            credits_by_customer[cp.customer_id].append(cp)
+
+        # ── 4. Active egg types (1 query) ──────────────────────────────
+        active_egg_types = list(EggType.objects.filter(is_active=True).order_by('order'))
+
+        # ── 5. Build response per customer ──────────────────────────────
+        # Only include customers that have sales in the range
+        customer_ids_with_sales = set(sales_by_customer.keys())
+        customers_qs = (
+            WholesaleCustomer.objects
+            .filter(is_active=True, id__in=customer_ids_with_sales)
+            .order_by('name')
+        )
+
+        customers_data = []
+        for customer in customers_qs:
+            cid = customer.id
+            c_sales = sales_by_customer.get(cid, [])
+
+            # All-time balance
+            at = alltime_map.get(cid, {})
+            total_purchased_alltime = at.get('total_purchased') or Decimal('0.00')
+            total_upfront_alltime = at.get('total_upfront') or Decimal('0.00')
+            total_credit_alltime = credit_alltime_map.get(cid) or Decimal('0.00')
             outstanding_balance = total_purchased_alltime - total_upfront_alltime - total_credit_alltime
 
             # In-range totals
-            range_total = c_sales.aggregate(t=Sum('total_amount'))['t'] or Decimal('0.00')
-            range_paid = c_sales.aggregate(t=Sum('amount_paid'))['t'] or Decimal('0.00')
+            range_total = sum(s.total_amount for s in c_sales)
+            range_paid = sum(s.amount_paid for s in c_sales)
 
-            # Egg type breakdown (in range)
-            sale_items = SaleItem.objects.filter(sale__in=c_sales)
+            # Egg type breakdown (from prefetched items)
+            egg_qty = defaultdict(int)
+            egg_rev = defaultdict(Decimal)
+            for sale in c_sales:
+                for item in sale.items.all():  # already prefetched
+                    egg_qty[item.egg_type_id] += item.quantity
+                    egg_rev[item.egg_type_id] += item.line_total
+
             egg_breakdown = []
-            for et in EggType.objects.filter(is_active=True).order_by('order'):
-                items = sale_items.filter(egg_type=et)
-                qty = items.aggregate(Sum('quantity'))['quantity__sum'] or 0
-                rev = sum(i.line_total for i in items)
+            for et in active_egg_types:
+                qty = egg_qty.get(et.id, 0)
                 if qty > 0:
                     egg_breakdown.append({
                         'egg_type': et.name,
                         'crates': qty,
-                        'revenue': str(rev),
+                        'revenue': str(egg_rev.get(et.id, Decimal('0.00'))),
                     })
 
-            # Daily purchase history (only active days)
+            # Daily purchase history
             running_balance = Decimal('0.00')
             daily_history = []
             for sale in c_sales:
-                sale_date = sale.sale_datetime.date().isoformat()
                 sale_balance = sale.total_amount - sale.amount_paid
                 running_balance += sale_balance
 
-                items_detail = []
-                for item in sale.items.all():
-                    items_detail.append({
-                        'egg_type': item.egg_type.name,
-                        'crates': item.quantity,
-                        'price_per_crate': str(item.price_per_crate or Decimal('0.00')),
-                        'line_total': str(item.line_total),
-                    })
+                items_detail = [{
+                    'egg_type': item.egg_type.name,
+                    'crates': item.quantity,
+                    'price_per_crate': str(item.price_per_crate or Decimal('0.00')),
+                    'line_total': str(item.line_total),
+                } for item in sale.items.all()]
 
                 daily_history.append({
-                    'date': sale_date,
+                    'date': sale.sale_datetime.date().isoformat(),
                     'sale_id': sale.id,
                     'items': items_detail,
                     'sale_total': str(sale.total_amount),
@@ -607,28 +663,23 @@ class ReportViewSet(viewsets.ViewSet):
                     'running_balance': str(running_balance),
                 })
 
-            # Credit payment history (in range)
-            credit_payments = CreditPayment.objects.filter(
-                customer=customer,
-                payment_date__date__range=[start_date, end_date]
-            ).order_by('payment_date')
-
+            # Credit payment history
             credit_history = [{
                 'id': cp.id,
                 'date': cp.payment_date.date().isoformat(),
                 'amount': str(cp.amount_paid),
                 'sale_id': cp.sale_id,
                 'notes': cp.notes,
-            } for cp in credit_payments]
+            } for cp in credits_by_customer.get(cid, [])]
 
             customers_data.append({
-                'customer_id': customer.id,
+                'customer_id': cid,
                 'customer_name': customer.name,
                 'phone': customer.phone,
                 'summary': {
                     'total_purchased_in_range': str(range_total),
                     'total_paid_in_range': str(range_paid),
-                    'transaction_count': c_sales.count(),
+                    'transaction_count': len(c_sales),
                     'outstanding_balance_alltime': str(outstanding_balance),
                 },
                 'egg_breakdown': egg_breakdown,
@@ -652,114 +703,23 @@ class ReportViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'], url_path='customer-report/excel')
     def customer_report_excel(self, request):
-        """Export customer report as Excel — one summary sheet + one sheet per customer."""
-        from sales.models import Sale, SaleItem, CreditPayment
-        from customers.models import WholesaleCustomer
-        from inventory.models import EggType
+        """Export customer report as Excel — reuses the optimised JSON logic."""
         from .utils import create_customer_excel_report
         from django.http import HttpResponse
 
+        # Reuse the JSON endpoint to build report_data
+        json_response = self.customer_report(request)
+        if json_response.status_code != 200:
+            return json_response
+
+        report_data = json_response.data
+
         try:
-            start_date = self._parse_date(request.query_params.get('start_date'), 'start_date')
-            end_date = self._parse_date(request.query_params.get('end_date'), 'end_date')
-            if start_date > end_date:
-                return Response({'error': 'start_date cannot be after end_date'}, status=400)
-        except ValidationError as e:
-            return Response({'error': str(e)}, status=400)
-
-        # Reuse the JSON logic to build report_data
-        # (Call the same endpoint logic internally)
-        customers_data = []
-        customers = WholesaleCustomer.objects.filter(is_active=True).order_by('name')
-
-        for customer in customers:
-            c_sales = (
-                Sale.objects
-                .filter(customer=customer, sale_datetime__date__range=[start_date, end_date])
-                .order_by('sale_datetime')
-                .prefetch_related('items__egg_type', 'credit_payments')
-            )
-            if not c_sales.exists():
-                continue
-
-            all_sales = Sale.objects.filter(customer=customer)
-            total_purchased_alltime = all_sales.aggregate(t=Sum('total_amount'))['t'] or Decimal('0.00')
-            total_upfront_alltime = all_sales.aggregate(t=Sum('amount_paid'))['t'] or Decimal('0.00')
-            total_credit_alltime = CreditPayment.objects.filter(
-                customer=customer
-            ).aggregate(t=Sum('amount_paid'))['t'] or Decimal('0.00')
-            outstanding_balance = total_purchased_alltime - total_upfront_alltime - total_credit_alltime
-
-            range_total = c_sales.aggregate(t=Sum('total_amount'))['t'] or Decimal('0.00')
-            range_paid = c_sales.aggregate(t=Sum('amount_paid'))['t'] or Decimal('0.00')
-
-            sale_items = SaleItem.objects.filter(sale__in=c_sales)
-            egg_breakdown = []
-            for et in EggType.objects.filter(is_active=True).order_by('order'):
-                items = sale_items.filter(egg_type=et)
-                qty = items.aggregate(Sum('quantity'))['quantity__sum'] or 0
-                rev = sum(i.line_total for i in items)
-                if qty > 0:
-                    egg_breakdown.append({
-                        'egg_type': et.name, 'crates': qty, 'revenue': str(rev),
-                    })
-
-            running_balance = Decimal('0.00')
-            daily_history = []
-            for sale in c_sales:
-                sale_balance = sale.total_amount - sale.amount_paid
-                running_balance += sale_balance
-                items_detail = [{
-                    'egg_type': item.egg_type.name,
-                    'crates': item.quantity,
-                    'price_per_crate': str(item.price_per_crate or Decimal('0.00')),
-                    'line_total': str(item.line_total),
-                } for item in sale.items.all()]
-
-                daily_history.append({
-                    'date': sale.sale_datetime.date().isoformat(),
-                    'sale_id': sale.id,
-                    'items': items_detail,
-                    'sale_total': str(sale.total_amount),
-                    'amount_paid': str(sale.amount_paid),
-                    'payment_status': sale.payment_status,
-                    'running_balance': str(running_balance),
-                })
-
-            credit_payments = CreditPayment.objects.filter(
-                customer=customer,
-                payment_date__date__range=[start_date, end_date]
-            ).order_by('payment_date')
-            credit_history = [{
-                'id': cp.id, 'date': cp.payment_date.date().isoformat(),
-                'amount': str(cp.amount_paid), 'sale_id': cp.sale_id, 'notes': cp.notes,
-            } for cp in credit_payments]
-
-            customers_data.append({
-                'customer_id': customer.id,
-                'customer_name': customer.name,
-                'phone': customer.phone,
-                'summary': {
-                    'total_purchased_in_range': str(range_total),
-                    'total_paid_in_range': str(range_paid),
-                    'transaction_count': c_sales.count(),
-                    'outstanding_balance_alltime': str(outstanding_balance),
-                },
-                'egg_breakdown': egg_breakdown,
-                'daily_history': daily_history,
-                'credit_payments': credit_history,
-            })
-
-        customers_data.sort(
-            key=lambda x: Decimal(x['summary']['outstanding_balance_alltime']),
-            reverse=True
-        )
-
-        report_data = {
-            'period': {'start_date': start_date.isoformat(), 'end_date': end_date.isoformat()},
-            'customer_count': len(customers_data),
-            'customers': customers_data,
-        }
+            start_date = request.query_params.get('start_date')
+            end_date = request.query_params.get('end_date')
+        except Exception:
+            start_date = 'report'
+            end_date = 'report'
 
         wb = create_customer_excel_report(report_data)
         response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
